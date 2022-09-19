@@ -1,0 +1,58 @@
+# golang:1.17.1-buster
+stages:
+  - build
+  - deploy
+
+.build:
+  image: golang:1.17.1-buster
+  stage: build
+  script:
+    - |
+      apt update
+      apt install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      go build
+  artifacts:
+    paths:
+      - rtp-audio-mixer
+    expire_in: 1 week
+  tags:
+    - support-cluster-runner
+
+.deploy:
+  image: ubuntu:20.04
+  stage: deploy
+  variables:
+    DEPLOY_ENV: "${STAGE_ENV}"
+    ANSIBLE_HOST_KEY_CHECKING: "False"
+  script:
+    - |
+      echo "$DEPLOY_ENV" > .env
+      source ./.env
+      echo "$ANSIBLE_INVENTORY" > ci/ansible/inventory && cat ci/ansible/inventory
+      echo $SSH_PRIVATE_KEY | base64 -d > ci/ansible/ssh.key && chmod 0600 ci/ansible/ssh.key
+      echo $GCP_KEY | base64 -d > ci/ansible/bucket-key.json
+      cp ./rtp-audio-mixer ci/ansible/
+      echo "using bucket $BUCKET_NAME and inventory $ANSIBLE_INVENTORY"
+      apt update && apt install -y openssh-client ansible
+      cd ci/ansible && ansible-playbook -i inventory install_mixer.yml --extra-vars "bucket=$BUCKET_NAME project=$GCLOUD_PROJECT_ID"
+  tags:
+    - support-cluster-runner
+
+build:
+  extends: .build
+  when: manual
+
+deploy_stage:
+  extends: .deploy
+  when: manual
+  variables:
+    DEPLOY_ENV: "$STAGE_ENV"
+
+deploy_prod01:
+  extends: .deploy
+  when: manual
+  variables:
+    DEPLOY_ENV: "$PROD01_ENV"
+  only:
+    - main
+    - release-candidate
